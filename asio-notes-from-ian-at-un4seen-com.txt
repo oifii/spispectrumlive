@@ -1,0 +1,77 @@
+Author	Topic: Is it possible to derive an ASIO livespec?  (Read 49 times)
+oifii
+Posts: 6
+
+
+	
+Is it possible to derive an ASIO livespec?
+« on: 8 May '15 - 18:45 »
+Reply with quoteQuote  Modify messageModify
+Hi All,
+
+Is it possible to derive an ASIO livespec? The livespec demo is based on BASS_RecordInit() and  BASS_RecordStart(). It does not seem there is an equivalent BASS_ASIO_RecordInit function etc. Is there a work around? If yes, what would the approach be?
+
+Steph
+
+Report to moderator     69.17.230.83
+Ian @ un4seen
+Administrator
+Posts: 17835
+
+
+	
+Re: Is it possible to derive an ASIO livespec?
+« Reply #1 on: 11 May '15 - 13:25 »
+Reply with quoteQuote
+With ASIO, playback and recording are handled by the same ASIO device/driver, so there is no need for a separate recording initialization function. For playback, you need to enable output channels, and for recording, you need to enable input channels. In both cases that's done via BASS_ASIO_ChannelEnable. A demonstration of recording with ASIO can be found in the RECTEST example that's included in the BASSASIO pacakge. You could merge that stuff with the BASS LIVESPEC example code. BASSASIO doesn't have a BASS_ChannelGetData equivalent, so you would still need BASS for the FFT processing. While looking for previous posts on the subject to link to, I found this old thread of yours:
+
+   www.un4seen.com/forum/?topic=13859
+
+The code I posted there could be applied in this case too with a little modification, perhaps something like this:
+
+BYTE *asiobuf; // buffer for the sample data
+DWORD asiobuflen, asiobufpos; // buffer length/position
+
+...
+
+bufstream=BASS_StreamCreate(rate, chans, BASS_SAMPLE_FLOAT|BASS_STREAM_DECODE, BufStreamProc, 0); // create a custom stream with the same format as ASIO input
+asiobuflen=2048*chans*sizeof(float); // buffer length for 2048 sample FFT
+asiobuf=(BYTE*)malloc(asiobuflen); // allocate the buffer
+memset(asiobuf, 0, asiobuflen);
+asiobufpos=0;
+
+...
+
+DWORD CALLBACK InputAsioProc(BOOL input, DWORD channel, void *buffer, DWORD length, void *user)
+{
+	if (length>=asiobuflen) { // enough data to fill entire buffer
+		memcpy(asiobuf, buffer, asiobuflen); // replace entire buffer
+		asiobufpos=0;
+		return 0;
+	}
+	if (length>=asiobuflen-asiobufpos) { // reaching end of buffer
+		DWORD c=asiobuflen-asiobufpos; // space to end of buffer
+		memcpy(asiobuf+asiobufpos, buffer, c); // fill that space
+		buffer=(BYTE*)buffer+c;
+		length-=c;
+		asiobufpos=0; // go back to start of buffer
+	}
+	memcpy(asiobuf+asiobufpos, buffer, length); // copy data to buffer
+	asiobufpos+=length; // advance buffer position
+	return 0;
+}
+
+...
+
+DWORD CALLBACK BufStreamProc(HSTREAM handle, void *buffer, DWORD length, void *user)
+{
+	int p=asiobufpos-length; // buffer read position
+	if (p<0) { // beyond start of buffer
+		memcpy(buffer, asiobuf+asiobuflen+p, -p); // copy data from end of buffer
+		memcpy((BYTE*)buffer-p, asiobuf, length+p); // copy remainder from start of buffer
+	} else
+		memcpy(buffer, asiobuf+p, length); // copy data from buffer
+	return length;
+}
+
+You would then use the "bufstream" handle in the BASS_ChannelGetData call. Note that this is assuming that the sample format is floating-point, eg. BASS_ASIO_ChannelSetFormat called with BASS_ASIO_FORMAT_FLOAT.
